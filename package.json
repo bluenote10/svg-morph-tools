@@ -5,6 +5,7 @@
   "main": "src/index.ts",
   "scripts": {
     "start": "node -r ts-node/register src/index.ts",
+    "render": "node -r ts-node/register src/render_gif.ts",
     "format": "prettier --write src/**/*.ts"
   },
   "author": "",
