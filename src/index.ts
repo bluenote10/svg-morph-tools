@@ -1,6 +1,7 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import { program } from 'commander';
+import * as fs from 'fs'
+import * as path from 'path'
+import * as glob from 'glob'
+import { program } from 'commander'
 
 import { JSDOM } from 'jsdom'
 import * as serialize from "w3c-xmlserializer"
@@ -9,8 +10,8 @@ const Node = new JSDOM().window.Node
 const HTMLElement = new JSDOM().window.HTMLElement
 const DOMParser = new JSDOM().window.DOMParser
 
-async function loadSvgDom(filename: string): Promise<SVGSVGElement> {
-  const data = await fs.promises.readFile(path.join(__dirname, filename))
+function loadSvgDom(filename: string): SVGSVGElement {
+  const data = fs.readFileSync(filename)
 
   const doc = new JSDOM(data).window.document;
 
@@ -155,27 +156,59 @@ function diff(svgA: SVGSVGElement, svgB: SVGSVGElement) {
   fused.appendChild(scriptTag1)
   const scriptTag2 = generateScriptTag("generated.js")
   fused.appendChild(scriptTag2)
-  fs.promises.writeFile("generated.svg", serialize(fused))
-  fs.promises.writeFile("generated.js", generateJS(allDiffs))
+  fs.writeFileSync("generated.svg", serialize(fused))
+  fs.writeFileSync("generated.js", generateJS(allDiffs))
 }
 
-async function main() {
+type Args = {
+  files: string[]
+}
+
+function parseArgs(): Args {
+
+  let filePatterns: string[] = []
+
   program
-    //.version('0.1.0')
     .arguments('[svg-frame-file...]')
     .action(function (svgFrameFile) {
-      console.log("here")
-      console.log(svgFrameFile);
+      filePatterns = svgFrameFile
     });
   program.parse(process.argv);
 
-  //let frameA = await loadSvgDom("svg_example.svg")
+  let files: string[] = []
+  for (const filePattern of filePatterns) {
+    files = files.concat(glob.sync(filePattern))
+  }
 
-  let frameA = await loadSvgDom("examples/frame1.svg")
-  let frameB = await loadSvgDom("examples/frame2.svg")
+  if (files.length == 0) {
+    console.error(`No files specified or no files found for patterns: ${JSON.stringify(filePatterns)}`);
+    process.exit(1);
+  }
 
-  diff(frameA, frameB)
+  return {
+    files
+  }
 }
 
+async function mainAsync() {
+  const args = parseArgs()
+
+  let frames = args.files.map( file => loadSvgDom(file) )
+
+  diff(frames[0], frames[1])
+}
+
+function main() {
+  mainAsync().catch(e => {
+    console.log("Unhandled exception:")
+    console.log(e)
+    process.exit(1)
+  });
+}
+
+
 main()
+
+
+
 
