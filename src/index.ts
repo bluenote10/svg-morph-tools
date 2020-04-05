@@ -2,11 +2,16 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as glob from 'glob'
 import { program } from 'commander'
+import * as dedent from 'dedent'
 
 import { JSDOM } from 'jsdom'
 import * as serialize from 'w3c-xmlserializer'
 
 const Node = new JSDOM().window.Node
+
+// ----------------------------------------------------------------------------
+// IO
+// ----------------------------------------------------------------------------
 
 function loadSvgDom(filename: string): SVGSVGElement {
   const data = fs.readFileSync(filename)
@@ -19,6 +24,84 @@ function loadSvgDom(filename: string): SVGSVGElement {
   }
   return svg
 }
+
+function generateScriptTag(url: string): Element {
+  const doc = new JSDOM().window.document
+  // Element must be created under the svg namespace, to match its parent namespace.
+  // Otherwise an xmlns="http://www.w3.org/1999/xhtml" is created.
+  const el = doc.createElementNS('http://www.w3.org/2000/svg', 'script')
+  el.setAttribute('type', 'text/javascript')
+  el.setAttribute('xlink:href', url)
+  return el
+}
+
+function convertToNumber(s: string): number | null {
+  return '' + Number(s) === s ? Number(s) : null
+}
+
+function generateJSAnimejs(frameDiffs: AttrDiffMaps[]): string {
+  let text = dedent`
+  console.log("animating...")
+
+  var tl = anime.timeline({
+    easing: 'easeOutExpo',
+    duration: 750
+  });
+
+  tl`
+
+  for (let frameNo = 0; frameNo < frameDiffs.length; frameNo++) {
+    const frameDiff = frameDiffs[frameNo]
+
+    for (let i = 0; i < frameDiff.length; ++i) {
+      const diff = frameDiff[i]
+
+      let params = {
+        targets: `#${diff.id}`,
+      }
+      for (let key of Object.keys(diff.diffs)) {
+        let [a, b] = diff.diffs[key]
+        //let aNumber = convertToNumber(a)
+        let bNumber = convertToNumber(b)
+        if (key === 'transform') {
+          console.log(a, b)
+          if (bNumber != null) {
+            params[key] = bNumber
+          } else {
+            params[key] = b
+          }
+        } else {
+          if (bNumber != null) {
+            params[key] = bNumber
+          } else {
+            params[key] = b
+          }
+        }
+      }
+      console.log(params)
+
+      let time = (frameNo + 1) * 500
+      /*
+      if (first) {
+        time = 500
+        first = false
+      }
+      */
+
+      text += dedent`
+      .add(
+        ${JSON.stringify(params)},
+        ${time}
+      )`
+    }
+  }
+
+  return text
+}
+
+// ----------------------------------------------------------------------------
+// Diffing
+// ----------------------------------------------------------------------------
 
 type AttrMap = { [key: string]: any }
 type AttrDiffMap = { [key: string]: [any, any] }
@@ -42,8 +125,10 @@ function diffElements(elA: Element, elB: Element): AttrDiffMap {
   let a = extractAttributes(elA)
   let b = extractAttributes(elB)
 
-  for (const key of Object.keys(b)) {
-    if (a[key] != null && b[key] != null && a[key] !== b[key]) {
+  let allKeys = Object.keys(a).concat(Object.keys(b))
+
+  for (const key of allKeys) {
+    if (a[key] !== b[key]) {
       result[key] = [a[key], b[key]]
     }
   }
@@ -104,67 +189,12 @@ function traverse(
   })
 }
 
-function generateScriptTag(url: string): Element {
-  const doc = new JSDOM().window.document
-  // Element must be created under the svg namespace, to match its parent namespace.
-  // Otherwise an xmlns="http://www.w3.org/1999/xhtml" is created.
-  const el = doc.createElementNS('http://www.w3.org/2000/svg', 'script')
-  el.setAttribute('type', 'text/javascript')
-  el.setAttribute('xlink:href', url)
-  return el
-}
-
-function generateJS(frameDiffs: AttrDiffMaps[]): string {
-  let text = `
-  console.log("animating...")
-
-  var tl = anime.timeline({
-    easing: 'easeOutExpo',
-    duration: 750
-  });
-
-  tl`
-
-  for (let frameNo = 0; frameNo < frameDiffs.length; frameNo++) {
-    const frameDiff = frameDiffs[frameNo]
-
-    for (let i = 0; i < frameDiff.length; ++i) {
-      const diff = frameDiff[i]
-
-      let params = {
-        targets: `#${diff.id}`,
-      }
-      for (let key of Object.keys(diff.diffs)) {
-        let value = diff.diffs[key][1]
-        params[key] = '' + Number(value) === value ? Number(value) : value
-      }
-      console.log(params)
-
-      let time = (frameNo + 1) * 500
-      /*
-      if (first) {
-        time = 500
-        first = false
-      }
-      */
-
-      text += `
-      .add(
-        ${JSON.stringify(params)},
-        ${time}
-      )`
-    }
-  }
-
-  return text
-}
-
 type Frame = {
   name: string
   svg: SVGSVGElement
 }
 
-function computeDiffs(frames: Frame[]) {
+function generateAnimatedSvg(frames: Frame[]) {
   let fused = frames[0].svg.cloneNode(true) as SVGSVGElement
   fused.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
   //console.log(serialize(fused))
@@ -185,7 +215,7 @@ function computeDiffs(frames: Frame[]) {
   const scriptTag2 = generateScriptTag('generated.js')
   fused.appendChild(scriptTag2)
   fs.writeFileSync('generated.svg', serialize(fused))
-  fs.writeFileSync('generated.js', generateJS(frameDiffs))
+  fs.writeFileSync('generated.js', generateJSAnimejs(frameDiffs))
 }
 
 type Args = {
@@ -228,7 +258,7 @@ async function mainAsync() {
     svg: loadSvgDom(file),
   }))
 
-  computeDiffs(frames)
+  generateAnimatedSvg(frames)
 }
 
 function main() {
