@@ -1,4 +1,5 @@
 import * as fs from 'fs'
+import * as path from 'path'
 import * as glob from 'glob'
 import { program } from 'commander'
 
@@ -90,7 +91,13 @@ function traverse(
         traverse(fused, prev, el as SVGSVGElement, allDiffs)
       }
     } else if (child.nodeType == Node.TEXT_NODE) {
-      console.log('TODO handle node')
+      let node = child as Text
+      let text = node.wholeText.trim()
+      if (text.length > 0) {
+        console.log('TODO handle non-empty text node')
+        console.log(node)
+        console.log(`'${text}'`)
+      }
     } else {
       console.log(`Unknown node type: ${child.nodeType}`)
     }
@@ -107,7 +114,7 @@ function generateScriptTag(url: string): Element {
   return el
 }
 
-function generateJS(allDiffs: AttrDiffMaps): string {
+function generateJS(frameDiffs: AttrDiffMaps[]): string {
   let text = `
   console.log("animating...")
 
@@ -118,37 +125,58 @@ function generateJS(allDiffs: AttrDiffMaps): string {
 
   tl`
 
-  for (const diff of allDiffs) {
-    let params = {
-      targets: `#${diff.id}`,
+  for (let frameNo = 0; frameNo < frameDiffs.length; frameNo++) {
+    const frameDiff = frameDiffs[frameNo]
+
+    for (let i = 0; i < frameDiff.length; ++i) {
+      const diff = frameDiff[i]
+
+      let params = {
+        targets: `#${diff.id}`,
+      }
+      for (let key of Object.keys(diff.diffs)) {
+        let value = diff.diffs[key][1]
+        params[key] = '' + Number(value) === value ? Number(value) : value
+      }
+      console.log(params)
+
+      let time = (frameNo + 1) * 500
+      /*
+      if (first) {
+        time = 500
+        first = false
+      }
+      */
+
+      text += `
+      .add(
+        ${JSON.stringify(params)},
+        ${time}
+      )`
     }
-    for (let key of Object.keys(diff.diffs)) {
-      let value = diff.diffs[key][1]
-      params[key] = '' + Number(value) === value ? Number(value) : value
-    }
-    console.log(params)
-    text += `
-    .add(
-      ${JSON.stringify(params)},
-      0
-    )`
   }
 
   return text
 }
 
-function diff(svgA: SVGSVGElement, svgB: SVGSVGElement) {
-  let fused = svgA.cloneNode(true) as SVGSVGElement
+type Frame = {
+  name: string
+  svg: SVGSVGElement
+}
+
+function computeDiffs(frames: Frame[]) {
+  let fused = frames[0].svg.cloneNode(true) as SVGSVGElement
   fused.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
-  //console.log(svgA.outerHTML)
   //console.log(serialize(fused))
 
-  // let layersA = svgA.getElementsByTagName('g')
-
-  const allDiffs = []
-  traverse(fused, svgA, svgB, allDiffs)
-  //console.log(new XMLSerializer().serializeToString(svgA));
-  console.log(allDiffs)
+  let frameDiffs: AttrDiffMaps[] = []
+  for (let i = 0; i < frames.length - 1; i++) {
+    console.log(`\n *** Computing diffs ${frames[i].name} => ${frames[i + 1].name}`)
+    const diffs: AttrDiffMaps = []
+    traverse(fused, frames[i].svg, frames[i + 1].svg, diffs)
+    frameDiffs.push(diffs)
+  }
+  console.log(frameDiffs)
 
   const scriptTag1 = generateScriptTag(
     'https://cdnjs.cloudflare.com/ajax/libs/animejs/3.1.0/anime.min.js'
@@ -157,7 +185,7 @@ function diff(svgA: SVGSVGElement, svgB: SVGSVGElement) {
   const scriptTag2 = generateScriptTag('generated.js')
   fused.appendChild(scriptTag2)
   fs.writeFileSync('generated.svg', serialize(fused))
-  fs.writeFileSync('generated.js', generateJS(allDiffs))
+  fs.writeFileSync('generated.js', generateJS(frameDiffs))
 }
 
 type Args = {
@@ -182,9 +210,7 @@ function parseArgs(): Args {
 
   if (files.length == 0) {
     console.error(
-      `No files specified or no files found for patterns: ${JSON.stringify(
-        filePatterns
-      )}`
+      `No files specified or no files found for patterns: ${JSON.stringify(filePatterns)}`
     )
     process.exit(1)
   }
@@ -197,9 +223,12 @@ function parseArgs(): Args {
 async function mainAsync() {
   const args = parseArgs()
 
-  let frames = args.files.map((file) => loadSvgDom(file))
+  let frames = args.files.map((file) => ({
+    name: path.basename(file),
+    svg: loadSvgDom(file),
+  }))
 
-  diff(frames[0], frames[1])
+  computeDiffs(frames)
 }
 
 function main() {
